@@ -1,0 +1,10 @@
+Android
+  ↓ Upload gambar (class 1 & 2)
+Flask backend
+  → Ekstrak RGB
+  → Train model (misal KNN)
+  → Convert model → .tflite
+  ↑ Kirim .tflite ke Android
+Android
+  → Load .tflite
+  → Klasifikasi gambar baru (warna RGB)
