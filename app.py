@@ -1,13 +1,12 @@
 # api/app.py
 from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS  # Untuk CORS
+from flask_cors import CORS  #  CORS
 import os
 from werkzeug.utils import secure_filename
 from utils.trainer import train_and_export_model
 
 app = Flask(__name__)
 
-# Menambahkan CORS
 CORS(app)
 
 UPLOAD_FOLDER = 'uploads'
@@ -60,7 +59,10 @@ def test():
     return "Server is running!"
 
 
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
 
-if __name__ == '__main__':
-    app.run(debug=True)
+
+# if __name__ == '__main__':
+#     app.run(debug=True)
 
