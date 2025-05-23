@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-5">
+    <h1 class="mb-4">📊 Dashboard</h1>
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">Jumlah Modul</h5>
+            <p class="card-text display-4">{{ total_modules }}</p>
+            <a href="{{ url_for('manage_modules') }}" class="btn btn-primary">Kelola Modul</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

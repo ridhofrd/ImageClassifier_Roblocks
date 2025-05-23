@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Questions for {{ module.title }}</h1>
+        <div>
+            <a href="{{ url_for('create_question', module_id=module.id) }}" class="btn btn-success">Add Question</a>
+            <a href="{{ url_for('manage_modules') }}" class="btn btn-secondary">Back to Modules</a>
+        </div>
+    </div>
+
+    <div class="list-group">
+        {% for question in questions %}
+        <div class="list-group-item">
+            <div class="d-flex justify-content-between">
+                <div>
+                    <h5>{{ question.question_text }}</h5>
+                    <div class="row mt-2">
+                        <div class="col-md-3">
+                            <span class="badge bg-{% if question.correct_answer == 'A' %}success{% else %}light text-dark{% endif %}">A: {{ question.option_a }}</span>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="badge bg-{% if question.correct_answer == 'B' %}success{% else %}light text-dark{% endif %}">B: {{ question.option_b }}</span>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="badge bg-{% if question.correct_answer == 'C' %}success{% else %}light text-dark{% endif %}">C: {{ question.option_c }}</span>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="badge bg-{% if question.correct_answer == 'D' %}success{% else %}light text-dark{% endif %}">D: {{ question.option_d }}</span>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <a href="{{ url_for('edit_question', question_id=question.id) }}" class="btn btn-sm btn-outline-secondary">Edit</a>
+                    <form method="POST" action="{{ url_for('delete_question', question_id=question.id) }}" class="d-inline">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure?')">Delete</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+{% endblock %}

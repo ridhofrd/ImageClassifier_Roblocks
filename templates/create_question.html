@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h1 class="mb-4">Create New Question</h1>
+    
+    <form method="POST" action="{{ url_for('create_question', module_id=module_id) }}">
+        <div class="mb-3">
+            <label for="id" class="form-label">Question ID</label>
+            <input type="text" class="form-control" id="id" name="id" required>
+        </div>
+        <div class="mb-3">
+            <label for="question_text" class="form-label">Question Text</label>
+            <textarea class="form-control" id="question_text" name="question_text" rows="3" required></textarea>
+        </div>
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <label for="option_a" class="form-label">Option A</label>
+                <input type="text" class="form-control" id="option_a" name="option_a" required>
+            </div>
+            <div class="col-md-6">
+                <label for="option_b" class="form-label">Option B</label>
+                <input type="text" class="form-control" id="option_b" name="option_b" required>
+            </div>
+        </div>
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <label for="option_c" class="form-label">Option C</label>
+                <input type="text" class="form-control" id="option_c" name="option_c" required>
+            </div>
+            <div class="col-md-6">
+                <label for="option_d" class="form-label">Option D</label>
+                <input type="text" class="form-control" id="option_d" name="option_d" required>
+            </div>
+        </div>
+        <div class="mb-3">
+            <label for="correct_answer" class="form-label">Correct Answer</label>
+            <select class="form-select" id="correct_answer" name="correct_answer" required>
+                <option value="">Select correct option</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+                <option value="D">D</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Create Question</button>
+        <a href="{{ url_for('manage_questions', module_id=module_id) }}" class="btn btn-secondary">Cancel</a>
+    </form>
+{% endblock %}

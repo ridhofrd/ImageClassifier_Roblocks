@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h1 class="mb-4">Edit Module</h1>
+    
+    <form method="POST" action="{{ url_for('edit_module', module_id=module.id) }}">
+        <div class="mb-3">
+            <label for="id" class="form-label">Module ID</label>
+            <input type="text" class="form-control" id="id" value="{{ module.id }}" readonly>
+        </div>
+        <div class="mb-3">
+            <label for="title" class="form-label">Title</label>
+            <input type="text" class="form-control" id="title" name="title" value="{{ module.title }}" required>
+        </div>
+        <div class="mb-3">
+            <label for="description" class="form-label">Description</label>
+            <textarea class="form-control" id="description" name="description" rows="3" required>{{ module.description }}</textarea>
+        </div>
+        <div class="mb-3">
+            <label for="link_video" class="form-label">Video Link</label>
+            <input type="url" class="form-control" id="link_video" name="link_video" value="{{ module.link_video }}" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Update Module</button>
+        <a href="{{ url_for('manage_modules') }}" class="btn btn-secondary">Cancel</a>
+    </form>
+{% endblock %}

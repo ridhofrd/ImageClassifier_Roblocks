@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Manage Modules</h1>
+        <a href="{{ url_for('create_module') }}" class="btn btn-success">Create New Module</a>
+    </div>
+
+    <div class="row">
+        {% for module in modules %}
+        <div class="col-md-4 mb-4">
+            <div class="card module-card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">{{ module.title }}</h5>
+                    <p class="card-text text-muted">{{ module.description[:100] }}{% if module.description|length > 100 %}...{% endif %}</p>
+                    <div class="d-flex justify-content-between">
+                        <a href="{{ url_for('manage_questions', module_id=module.id) }}" class="btn btn-sm btn-outline-primary">Manage Questions</a>
+                        <div>
+                            <a href="{{ url_for('edit_module', module_id=module.id) }}" class="btn btn-sm btn-outline-secondary">Edit</a>
+                            <form method="POST" action="{{ url_for('delete_module', module_id=module.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure?')">Delete</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+{% endblock %}
