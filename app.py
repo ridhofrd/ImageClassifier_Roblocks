@@ -6,27 +6,14 @@ from werkzeug.utils import secure_filename
 from datetime import datetime
 import uuid
 import json
-from flask import session
+# import yaml # No longer needed for TensorFlow training
 import logging # For better logging
-import shutil
-import re
-import os
-# from tflite_support import flatbuffers
-# from tflite_support import metadata as _metadata_fb
-# from tflite_support.metadata_writers import image_classifier
-# from tflite_support.metadata_writers import writer_utils
 
 import tensorflow as tf
-import numpy as np
 from sklearn.model_selection import train_test_split
 
 app = Flask(__name__)
 CORS(app)
-app.secret_key = 'RoblockSecretKey' 
-
-
-os.environ['TF_LOGGING_VERBOSITY'] = 'ERROR'  
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'     
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -67,16 +54,9 @@ def execute_query(query, args=None, fetch_one=False, commit=False):
 # --- API Image Classifier with TensorFlow ---
 @app.route('/train', methods=['POST'])
 def train():
-    session_id = request.args.get('session_id')
-    if not session_id:
-        return jsonify({"error": "Missing session_id"}), 400
-    
-    session_folder = os.path.join(UPLOAD_FOLDER, session_id)
-    if os.path.exists(session_folder):
-        app.logger.warning(f"Session folder already exists: {session_folder}. Overwriting.")
-        shutil.rmtree(session_folder)
-    
-    os.makedirs(session_folder)
+    session_id = str(uuid.uuid4())
+    session_folder = os.path.abspath(os.path.join(UPLOAD_FOLDER, session_id))
+    os.makedirs(session_folder, exist_ok=True)
     app.logger.info(f"Session folder created: {session_folder}")
     app.logger.info(f"Query params: {request.args}")
     app.logger.info(f"Form data: {request.form}")
@@ -84,47 +64,40 @@ def train():
 
     try:
         # Get parameters and class labels
-        class_labels_raw = request.form.getlist('class_label')
-        app.logger.info(f"Raw class labels: {class_labels_raw}")
+        class_label_raw = request.form.get('class_label')
+        app.logger.info(f"Raw class_label: {class_label_raw}")
         class_labels_from_form = []
-
-        for label in class_labels_raw:
-            if not label:
-                continue
+        if class_label_raw:
             try:
-                parsed = json.loads(label)
+                # Try parsing as JSON list
+                parsed = json.loads(class_label_raw)
                 if isinstance(parsed, list):
-                    class_labels_from_form.extend(parsed)
+                    class_labels_from_form = sorted(list(set(parsed)))
                 elif isinstance(parsed, str):
-                    class_labels_from_form.append(parsed)
+                    class_labels_from_form = [parsed]
                 else:
-                    app.logger.error(f"Invalid class_label format for {label}: expected JSON list or string")
-                    return jsonify({"error": f"Invalid class_label format for {label}, expected JSON list or string"}), 400
+                    app.logger.error("class_label is neither a JSON list nor a string")
+                    return jsonify({"error": "Invalid class_label format, expected JSON list or string"}), 400
             except json.JSONDecodeError:
-                class_labels_from_form.append(label.strip('"'))
-                app.logger.info(f"Treating class_label as plain string: {label}")
+                # Treat as single string if JSON parsing fails
+                class_labels_from_form = [class_label_raw]
+                app.logger.info(f"Treating class_label as single string: {class_label_raw}")
+            class_labels_from_form = sorted(list(set(class_labels_from_form)))
+        else:
+            app.logger.error("No class_label provided in form")
+            return jsonify({"error": "No class labels provided"}), 400
 
-        class_labels_from_form = sorted(list(set(class_labels_from_form)))
-        if not class_labels_from_form:
-            app.logger.error("No valid class labels provided")
-            return jsonify({"error": "No valid class labels provided"}), 400
-        app.logger.info(f"Intended class labels from form: {class_labels_from_form}")
-
-        train_base_dir = os.path.join(session_folder, 'train')
-        val_base_dir = os.path.join(session_folder, 'val')
-        os.makedirs(train_base_dir, exist_ok=True)
-        os.makedirs(val_base_dir, exist_ok=True)
-
-        for label in class_labels_from_form:
-            os.makedirs(os.path.join(train_base_dir, label), exist_ok=True)
-            os.makedirs(os.path.join(val_base_dir, label), exist_ok=True)
-
-        app.logger.info(f"Created train_base_dir: {train_base_dir}, val_base_dir: {val_base_dir}")
         epochs = int(request.args.get('epochs', 10))
         batch_size = int(request.args.get('batch_size', 32))
         learning_rate = float(request.args.get('learning_rate', 0.001))
         app.logger.info(f"Parameters - epochs: {epochs}, batch_size: {batch_size}, learning_rate: {learning_rate}")
 
+        if not class_labels_from_form:
+            app.logger.error("No valid class labels after processing")
+            return jsonify({"error": "No valid class labels provided"}), 400
+        app.logger.info(f"Intended class labels from form: {class_labels_from_form}")
+
+        # Prepare image file paths and labels
         image_paths_original_location = []
         image_labels_original = []
 
@@ -175,20 +148,27 @@ def train():
             app.logger.error("No valid images were processed after parsing labels.")
             return jsonify({"error": "No valid images were processed"}), 400
 
+        # Handle single image case (temporary for testing)
+        if len(image_paths_original_location) < 2:
+            app.logger.warning("Only one image provided; skipping train/validation split for testing.")
+            # For testing, proceed with single image; adjust for production
+            # return jsonify({"error": "Not enough images to split for training and validation. Need at least 2."}), 400
+        
         min_samples_per_class = min([image_labels_original.count(cls) for cls in set(image_labels_original)]) if image_labels_original else 0
         can_stratify = min_samples_per_class >= 2 if len(set(image_labels_original)) > 1 else False
 
         if can_stratify:
             train_files, val_files, _, _ = train_test_split(
-                image_paths_original_location, image_labels_original,
+                image_paths_original_location, image_labels_original, 
                 test_size=0.2, stratify=image_labels_original, random_state=42
             )
         else:
-            app.logger.warning("Not enough samples for stratification. Splitting without stratification.")
+            if not can_stratify and len(set(image_labels_original)) > 1:
+                 app.logger.warning("Not enough samples in at least one class for stratification. Splitting without stratification.")
             train_files, val_files = train_test_split(
-                image_paths_original_location, test_size=0.2, random_state=42, shuffle=True
+                image_paths_original_location, test_size=0.2, random_state=42, shuffle=True 
             )
-
+        
         for file_path in train_files:
             original_index = image_paths_original_location.index(file_path)
             label = image_labels_original[original_index]
@@ -202,6 +182,7 @@ def train():
             os.rename(file_path, dest_path)
         
         if os.path.exists(temp_image_save_dir):
+            import shutil
             shutil.rmtree(temp_image_save_dir)
 
         app.logger.info(f"Train directory: {train_base_dir}, Val directory: {val_base_dir}")
@@ -209,8 +190,8 @@ def train():
         try:
             train_dataset = tf.keras.utils.image_dataset_from_directory(
                 train_base_dir,
-                labels='inferred',
-                label_mode='categorical',
+                labels='inferred', 
+                label_mode='categorical', 
                 image_size=IMAGE_SIZE,
                 interpolation='nearest',
                 batch_size=batch_size,
@@ -226,14 +207,14 @@ def train():
                 shuffle=False
             )
         except Exception as e:
-            app.logger.error(f"Error creating TensorFlow image datasets: {e}")
-            return jsonify({"error": f"Failed to load images for training. Ensure each class has images. Details: {str(e)}"}), 500
+            app.logger.error(f"Error creating TensorFlow image datasets: {e}. Check if all class folders under train/val have images.")
+            return jsonify({"error": f"Failed to load images for training. Ensure each class has images in train and val sets. Details: {str(e)}"}), 500
 
         actual_class_names = train_dataset.class_names
         num_classes = len(actual_class_names)
         if num_classes == 0:
-            app.logger.error("TensorFlow inferred 0 classes. Check directory structure.")
-            return jsonify({"error": "No classes found in training data."}), 400
+            app.logger.error("TensorFlow inferred 0 classes. Train/Val directories might be empty or structured incorrectly.")
+            return jsonify({"error": "No classes found in the training data. Please check directory structure and image uploads."}), 400
         app.logger.info(f"TensorFlow inferred class names: {actual_class_names}, Num classes: {num_classes}")
 
         data_augmentation = tf.keras.Sequential([
@@ -245,7 +226,7 @@ def train():
         normalization_layer = tf.keras.layers.Rescaling(1./255)
         
         def preprocess_dataset(image, label):
-            image = normalization_layer(image)
+            image = normalization_layer(image) 
             return image, label
 
         train_dataset = train_dataset.map(lambda x, y: (data_augmentation(x, training=True), y), num_parallel_calls=tf.data.AUTOTUNE)
@@ -258,16 +239,16 @@ def train():
 
         base_model = tf.keras.applications.EfficientNetB0(
             input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
-            include_top=False,
-            weights='imagenet'
+            include_top=False, 
+            weights='imagenet' 
         )
-        base_model.trainable = False
+        base_model.trainable = False 
 
         inputs = tf.keras.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3))
-        x = inputs
-        x = base_model(x, training=False)
+        x = inputs 
+        x = base_model(x, training=False) 
         x = tf.keras.layers.GlobalAveragePooling2D()(x)
-        x = tf.keras.layers.Dropout(0.2)(x)
+        x = tf.keras.layers.Dropout(0.2)(x) 
         outputs = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
         model = tf.keras.Model(inputs, outputs)
 
@@ -276,89 +257,306 @@ def train():
             loss='categorical_crossentropy',
             metrics=['accuracy']
         )
-        app.logger.info("Model compiled.")
+        app.logger.info("TensorFlow model compiled.")
         model.summary(print_fn=app.logger.info)
 
-        app.logger.info(f"Starting training for {epochs} epochs...")
+        app.logger.info(f"Starting TensorFlow model training for {epochs} epochs...")
         history = model.fit(
             train_dataset,
             epochs=epochs,
             validation_data=val_dataset,
         )
-
-        metrics_history = {
-            "accuracy": history.history['accuracy'],
-            "val_accuracy": history.history.get('val_accuracy', []),
-            "loss": history.history['loss'],
-            "val_loss": history.history.get('val_loss', [])
-        }
-        final_val_accuracy = metrics_history['val_accuracy'][-1] if metrics_history['val_accuracy'] else 0.0
+        app.logger.info("TensorFlow model training completed.")
 
         keras_model_dir = os.path.join(session_folder, 'keras_saved_model')
-        model.export(keras_model_dir)
-        app.logger.info(f"Keras model exported to: {keras_model_dir}")
+        model.export(keras_model_dir) 
+        app.logger.info(f"Keras model exported to SavedModel format at: {keras_model_dir}")
 
-        # Convert to TFLite 
+
         converter = tf.lite.TFLiteConverter.from_saved_model(keras_model_dir)
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_ops = [
-            tf.lite.OpsSet.TFLITE_BUILTINS,
-            tf.lite.OpsSet.SELECT_TF_OPS
-        ]
-        converter.target_spec.supported_types = [tf.float32]
-        try:
-            tflite_model_content = converter.convert()
-        except Exception as e:
-            app.logger.error(f"TFLite conversion failed: {str(e)}")
-            return jsonify({"error": f"TFLite conversion failed: {str(e)}"}), 500
+        converter.optimizations = [tf.lite.Optimize.DEFAULT] 
+        tflite_model_content = converter.convert()
 
-        # Save the raw .tflite model to a file
         temp_tflite_path = os.path.join(session_folder, 'model.tflite')
         with open(temp_tflite_path, 'wb') as f:
             f.write(tflite_model_content)
-        app.logger.info(f"Raw TFLite model without metadata saved to: {temp_tflite_path}")
+        app.logger.info(f"TFLite model converted and saved to: {temp_tflite_path}")
 
-        MODEL_PATH = temp_tflite_path
+        # Ensure target directory exists and remove old model if it exists
+        final_model_dir = os.path.dirname(MODEL_PATH)
+        os.makedirs(final_model_dir, exist_ok=True) 
+        if os.path.exists(MODEL_PATH):
+            os.remove(MODEL_PATH)
+            app.logger.info(f"Removed existing model at: {MODEL_PATH}")
+        
+        os.rename(temp_tflite_path, MODEL_PATH)
+        app.logger.info(f"TFLite model moved to final path: {MODEL_PATH}")
+        db_model_path = MODEL_PATH 
 
+        #nanti kalau udah ada server di aktifin lagi
+
+        # query = """
+        #     INSERT INTO Training_sessions
+        #     (session_id, class_labels, model_path, created_at)
+        #     VALUES (%s, %s, %s, %s)
+        # """
+        # execute_query(query, (session_id, ','.join(actual_class_names), db_model_path, int(datetime.now().timestamp() * 1000)), commit=True)
+
+        training_metrics = {
+            "epochs": list(range(1, len(history.history['loss']) + 1)),
+            "loss": history.history.get('loss', []),
+            "accuracy": history.history.get('accuracy', []),
+            "val_loss": history.history.get('val_loss', []),
+            "val_accuracy": history.history.get('val_accuracy', [])
+        }
+        final_val_accuracy = history.history['val_accuracy'][-1] if history.history.get('val_accuracy') else 0.0
+
+        app.logger.info("Training successful.")
         return jsonify({
-            "status": "success",
-            "session_id": session_id,
-            "model_path": MODEL_PATH,
-            "class_names_inferred": actual_class_names, # This is now the only source of labels for the app
+            "status": "success", 
+            "session_id": session_id, 
+            "model_path": db_model_path, 
+            "class_names_inferred": actual_class_names,
             "final_val_accuracy": final_val_accuracy,
-            "metrics_history": metrics_history,
-            "message": "Model trained and saved successfully.",
-            "class_names": actual_class_names,
-            "session_folder": session_folder,
-            "num_classes": num_classes,
-            "epochs": epochs
+            "metrics_history": training_metrics
         }), 200
 
     except Exception as e:
-        app.logger.exception("Unexpected error during training")
-        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+        app.logger.error(f"Training Error: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
+# --- Download Model ---
 @app.route('/download_model', methods=['GET'])
 def download_model():
-    session_id = request.args.get('session_id')
-    if not session_id or not re.match(r'^[a-zA-Z0-9_-]+$', session_id):
-        app.logger.error(f"Invalid or missing session_id: {session_id}")
-        return jsonify({"error": "Invalid or missing session_id. Use alphanumeric characters, underscores, or hyphens only."}), 400
+    model_to_download_path = os.path.abspath(MODEL_PATH)
+    if os.path.exists(model_to_download_path):
+        return send_file(model_to_download_path, as_attachment=True)
+    return jsonify({"error": "Model not found"}), 404
 
-    session_folder = os.path.abspath(os.path.join(UPLOAD_FOLDER, session_id))
-    model_path = os.path.join(session_folder, 'model.tflite')
-    
-    if not os.path.exists(model_path):
-        app.logger.error(f"Model not found at: {model_path}")
-        return jsonify({"error": f"Model not found at {model_path}"}), 404
-    
-    app.logger.info(f"Serving model file: {model_path}")
+# --- API Module and Quiz for Android App ---
+@app.route('/api/modules', methods=['GET'])
+def api_get_all_modules():
+    query = "SELECT * FROM Module_table"
+    modules = execute_query(query)
+    return jsonify(modules)
+
+@app.route('/api/modules/<module_id>', methods=['GET'])
+def api_get_module(module_id):
+    query = "SELECT * FROM Module_table WHERE id = %s"
+    module = execute_query(query, (module_id,), fetch_one=True)
+    if module:
+        return jsonify(module)
+    return jsonify({"error": "Module not found"}), 404
+
+@app.route('/api/modules/<module_id>/questions', methods=['GET'])
+def api_get_module_questions(module_id):
+    query = "SELECT * FROM Question_table WHERE module_id = %s"
+    questions = execute_query(query, (module_id,))
+    return jsonify(questions)
+
+# --- Web Interface Module and Quiz ---
+@app.route('/')
+@app.route('/dashboard')
+def dashboard():
     try:
-        return send_file(model_path, as_attachment=True, download_name='model.tflite')
+        query = "SELECT COUNT(*) as total_modules FROM Module_table"
+        result = execute_query(query, fetch_one=True)
+        total_modules = result['total_modules'] if result else 0
     except Exception as e:
-        app.logger.error(f"Failed to send model file {model_path}: {str(e)}")
-        return jsonify({"error": f"Failed to send model file: {str(e)}"}), 500
+        app.logger.error(f"Error fetching dashboard data: {e}")
+        total_modules = "Error" 
+    return render_template('dashboard.html', total_modules=total_modules)
 
+@app.route('/modules')
+def manage_modules():
+    try:
+        query = "SELECT * FROM Module_table"
+        modules = execute_query(query)
+    except Exception as e:
+        app.logger.error(f"Error fetching modules: {e}")
+        modules = [] 
+    return render_template('modules.html', modules=modules)
+
+@app.route('/modules/create', methods=['GET', 'POST'])
+def create_module():
+    if request.method == 'POST':
+        try:
+            data = request.form
+            query = """
+                INSERT INTO Module_table
+                (id, title, description, created_at, updated_at, link_video)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            timestamp = int(datetime.now().timestamp() * 1000)
+            args = (
+                data.get('id'), 
+                data.get('title'), 
+                data.get('description'),
+                timestamp, 
+                timestamp, 
+                data.get('link_video')
+            )
+            execute_query(query, args, commit=True)
+            return redirect(url_for('manage_modules'))
+        except Exception as e:
+            app.logger.error(f"Error creating module: {e}")
+            return "Error creating module", 500
+    return render_template('create_module.html')
+
+@app.route('/modules/<module_id>/edit', methods=['GET', 'POST'])
+def edit_module(module_id):
+    if request.method == 'POST':
+        try:
+            data = request.form
+            query = """
+                UPDATE Module_table
+                SET title = %s, description = %s, updated_at = %s, link_video = %s
+                WHERE id = %s
+            """
+            timestamp = int(datetime.now().timestamp() * 1000)
+            args = (
+                data.get('title'), 
+                data.get('description'),
+                timestamp, 
+                data.get('link_video'), 
+                module_id
+            )
+            execute_query(query, args, commit=True)
+            return redirect(url_for('manage_modules'))
+        except Exception as e:
+            app.logger.error(f"Error editing module {module_id}: {e}")
+            return f"Error editing module {module_id}", 500
+            
+    try:
+        query = "SELECT * FROM Module_table WHERE id = %s"
+        module = execute_query(query, (module_id,), fetch_one=True)
+        if not module:
+            return "Module not found", 404
+        return render_template('edit_module.html', module=module)
+    except Exception as e:
+        app.logger.error(f"Error fetching module {module_id} for edit: {e}")
+        return f"Error fetching module {module_id}", 500
+
+
+@app.route('/modules/<module_id>/delete', methods=['POST'])
+def delete_module(module_id):
+    try:
+        query = "DELETE FROM Module_table WHERE id = %s"
+        execute_query(query, (module_id,), commit=True)
+        return redirect(url_for('manage_modules'))
+    except Exception as e:
+        app.logger.error(f"Error deleting module {module_id}: {e}")
+        return f"Error deleting module {module_id}", 500
+
+@app.route('/modules/<module_id>/questions')
+def manage_questions(module_id):
+    try:
+        module_query = "SELECT * FROM Module_table WHERE id = %s"
+        module = execute_query(module_query, (module_id,), fetch_one=True)
+        if not module:
+            return "Module not found", 404
+
+        questions_query = "SELECT * FROM Question_table WHERE module_id = %s"
+        questions = execute_query(questions_query, (module_id,))
+        return render_template('questions.html', module=module, questions=questions)
+    except Exception as e:
+        app.logger.error(f"Error managing questions for module {module_id}: {e}")
+        return f"Error managing questions for module {module_id}", 500
+
+
+@app.route('/modules/<module_id>/questions/create', methods=['GET', 'POST'])
+def create_question(module_id):
+    if request.method == 'POST':
+        try:
+            data = request.form
+            query = """
+                INSERT INTO Question_table
+                (id, module_id, question_text, option_a, option_b, option_c, option_d, correct_answer, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            timestamp = int(datetime.now().timestamp() * 1000)
+            args = (
+                data.get('id'), module_id, data.get('question_text'),
+                data.get('option_a'), data.get('option_b'), data.get('option_c'), data.get('option_d'),
+                data.get('correct_answer'), timestamp, timestamp
+            )
+            execute_query(query, args, commit=True)
+            return redirect(url_for('manage_questions', module_id=module_id))
+        except Exception as e:
+            app.logger.error(f"Error creating question for module {module_id}: {e}")
+            return f"Error creating question for module {module_id}", 500
+    return render_template('create_question.html', module_id=module_id)
+
+@app.route('/questions/<question_id>/edit', methods=['GET', 'POST'])
+def edit_question(question_id):
+    try:
+        module_id_query = "SELECT module_id FROM Question_table WHERE id = %s"
+        question_data = execute_query(module_id_query, (question_id,), fetch_one=True)
+        if not question_data:
+            return "Question not found to determine module", 404
+        redirect_module_id = question_data['module_id']
+
+        if request.method == 'POST':
+            data = request.form
+            query = """
+                UPDATE Question_table
+                SET question_text = %s, option_a = %s, option_b = %s,
+                    option_c = %s, option_d = %s, correct_answer = %s, updated_at = %s
+                WHERE id = %s
+            """
+            timestamp = int(datetime.now().timestamp() * 1000)
+            args = (
+                data.get('question_text'), data.get('option_a'), data.get('option_b'),
+                data.get('option_c'), data.get('option_d'), data.get('correct_answer'),
+                timestamp, question_id
+            )
+            execute_query(query, args, commit=True)
+            return redirect(url_for('manage_questions', module_id=redirect_module_id))
+
+        query_select = "SELECT * FROM Question_table WHERE id = %s" 
+        question = execute_query(query_select, (question_id,), fetch_one=True)
+        if not question:
+            return "Question not found", 404
+        return render_template('edit_question.html', question=question)
+    except Exception as e:
+        app.logger.error(f"Error editing question {question_id}: {e}")
+        return f"Error editing question {question_id}", 500
+
+
+@app.route('/questions/<question_id>/delete', methods=['POST'])
+def delete_question(question_id):
+    try:
+        module_query = "SELECT module_id FROM Question_table WHERE id = %s"
+        question = execute_query(module_query, (question_id,), fetch_one=True)
+        if not question:
+            app.logger.warning(f"Attempted to delete non-existent question or question without module_id: {question_id}")
+            return redirect(url_for('manage_modules')) 
+
+        query_delete = "DELETE FROM Question_table WHERE id = %s" 
+        execute_query(query_delete, (question_id,), commit=True)
+        return redirect(url_for('manage_questions', module_id=question['module_id']))
+    except Exception as e:
+        app.logger.error(f"Error deleting question {question_id}: {e}")
+        return f"Error deleting question {question_id}", 500
+
+
+# --- Additional Endpoints ---
+@app.route('/upload', methods=['POST'])
+def upload_image(): # This is a generic image uploader, not used by /train
+    label = request.form.get('label')
+    image = request.files.get('image')
+
+    if not label or not image or not image.filename:
+        return jsonify({'error': 'Label and image file are required.'}), 400
+
+    label_folder = os.path.join(UPLOAD_FOLDER, secure_filename(label)) 
+    os.makedirs(label_folder, exist_ok=True)
+
+    filename = secure_filename(image.filename) # Corrected: removed .keras concatenation
+    image_path = os.path.join(label_folder, filename)
+    image.save(image_path)
+
+    return jsonify({'message': f'Image saved to {image_path}'}), 200
 
 @app.route('/ping', methods=['GET'])
 def ping():
@@ -369,7 +567,4 @@ def test():
     return "Server is running!"
 
 if __name__ == '__main__':
-    import os
-    extra_dirs = [os.getcwd()] 
-    extra_files = []
-    app.run(host='0.0.0.0', port=5000, extra_files=extra_files, debug=True, use_reloader= False)
+    app.run(host='0.0.0.0', port=5000, debug=True)
